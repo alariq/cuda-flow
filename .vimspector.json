@@ -1,0 +1,38 @@
+{
+    "configurations": {
+        "simple-config": {
+            "default": true,
+            "adapter": "vscode-cpptools",
+            "configuration": {
+                "stuff": "see https://code.visualstudio.com/docs/cpp/launch-json-reference for docs",
+
+                "request" : "launch",
+                "type": "cppdbg",
+                "protocol": "auto",
+                "stopAtEntry": true,
+                "console": "integratedTerminal",
+                "program": "${workspaceRoot}/build/cuda-flow",
+                "cwd": "${workspaceRoot}",
+                "MIMode": "gdb",
+                "launchCompleteCommand": "exec-run",
+                "setupCommands": [
+                    {
+                        "description": "Enable pretty-printing for gdb",
+                        "text": "-enable-pretty-printing",
+                        "ignoreFailures": true
+                    }
+                ],
+                "env": {
+                },
+                "args--": ["--left", "img/DJI_0616.jpg", "--right", "img/DJI_0618.jpg" ],
+                "args": ["--left", "~/mpv-shot0016.jpg", "--right", "~/mpv-shot0017.jpg" ]
+            }
+        },
+        "simple-noargs":{
+            "extends": "simple-config",
+            "configuration": {
+                "args": []
+            }
+        }
+    }
+}
