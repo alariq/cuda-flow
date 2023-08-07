@@ -248,6 +248,25 @@ Mat myDrawMatches(Mat grey1, Mat grey2, const std::vector<DMatch> matches,
     return result;
 }
 
+std::vector<Point2f> transformBox(Rect r, Mat H) {
+    std::vector<Point2f> obj_corners(4);
+    obj_corners[0] = Point2f(r.x, r.y);
+    obj_corners[1] = Point2f(r.x + r.width, r.y);
+    obj_corners[2] = Point2f(r.x + r.width, r.y + r.height);
+    obj_corners[3] = Point2f(r.x, r.y + r.height);
+
+    std::vector<Point2f> scene_corners(4);
+    perspectiveTransform(obj_corners, scene_corners, H);
+    return scene_corners;
+}
+
+void drawPolyline(Mat out, std::vector<Point2f> pts, Point2f off, Scalar colour, int width) {
+    uint32_t count = pts.size();
+    for(int i=0;i<count; ++i) {
+        line(out, pts[i] + off, pts[(i+1)%count] + off, colour, width);
+    }
+}
+
 void usage() {
     fprintf(stderr, "usage: cuda-flow [--left img --right img] [--video file]\n");
 }
@@ -302,7 +321,11 @@ int main(int argc, char **argv)
         }
         else if (string(argv[i]) == "--video" && argc>i+1)
         {
-            cap.open(argv[++i]);
+            if(!cap.open(argv[++i])) {
+                fprintf(stderr, "Cannot open video input file: %s\n", argv[i]);
+                usage();
+                return -1;
+            }
             bUseVideo = true;
         }
         else if (string(argv[i]) == "--help")
@@ -334,8 +357,29 @@ int main(int argc, char **argv)
     int opencv_inliers;
     int K;
 
-    while(!g_bExit)
+    int frame_idx = -1;
+    while(!g_bExit && cap.isOpened())
     {
+
+        //cpu_img1 = cpu_img2;
+        //img1 = img2;
+        cpu_img2.copyTo(cpu_img1);
+        img2.copyTo(img1);
+
+
+        Mat f;
+        if(!cap.read(f)) {
+            fprintf(stderr, "Error reading frame");
+            exit(-1);
+        }
+
+        cv::cvtColor(f, cpu_img2, cv::COLOR_RGB2GRAY);
+        img2.upload(cpu_img2);
+
+        frame_idx++;
+
+        if(frame_idx<1)
+            continue;
 
         // SURF
         vector <Point2Df> src, dst;
@@ -551,41 +595,28 @@ int main(int argc, char **argv)
             }
         }
 
-        std::vector<Point2f> obj_corners(4);
-        obj_corners[0] = Point2f(g_rectangle.x, g_rectangle.y);
-        obj_corners[1] = Point2f(g_rectangle.x + g_rectangle.width, g_rectangle.y);
-        obj_corners[2] = Point2f(g_rectangle.x + g_rectangle.width, g_rectangle.y + g_rectangle.height);
-        obj_corners[3] = Point2f(g_rectangle.x, g_rectangle.y + g_rectangle.height);
+        std::vector<Point2f> opencv_pts = transformBox(g_rectangle, OpenCV_H);
+        std::vector<Point2f> gpu_pts = transformBox(g_rectangle, refined_H);
 
-        Mat H = g_bUseGPUHomography ? refined_H : OpenCV_H;
-        std::vector<Point2f> scene_corners(4);
-        perspectiveTransform(obj_corners, scene_corners, H);
         Point2f y_off = Point2f(0, cpu_img1.rows);
+        drawPolyline(out, opencv_pts, y_off, Scalar(0, 255, 0), 1);
+        drawPolyline(out, gpu_pts, y_off, Scalar(0, 0, 255), 1);
 
-        //-- Draw lines between the corners (the mapped object in the scene - image_2 )
-        line( out, scene_corners[0] + y_off, scene_corners[1] + y_off, Scalar(0, 255, 0), 4 );
-        line( out, scene_corners[1] + y_off, scene_corners[2] + y_off, Scalar( 0, 255, 0), 4 );
-        line( out, scene_corners[2] + y_off, scene_corners[3] + y_off, Scalar( 0, 255, 0), 4 );
-        line( out, scene_corners[3] + y_off, scene_corners[0] + y_off, Scalar( 0, 255, 0), 4 );
-
-
+        // drawText
         {
-        String text = g_bUseGPUHomography ? "GPU" : "OpenCV";
-        int fontFace = FONT_HERSHEY_PLAIN;
-        double fontScale = 1;
-        int thickness = 1;
+            String text = g_bUseGPUHomography ? "GPU" : "OpenCV";
+            int fontFace = FONT_HERSHEY_PLAIN;
+            double fontScale = 1;
+            int thickness = 1;
 
-        int baseline=0;
-        Size textSize = getTextSize(text, fontFace,
-                                    fontScale, thickness, &baseline);
-        baseline += thickness;
+            int baseline=0;
+            Size textSize = getTextSize(text, fontFace, fontScale, thickness, &baseline);
+            baseline += thickness;
 
-        // center the text
-        Point textOrg((out.cols - textSize.width)/2,
-                      out.rows - textSize.height);
+            // center the text
+            Point textOrg((out.cols - textSize.width)/2, out.rows - textSize.height);
 
-        putText(out, text, textOrg, fontFace, fontScale,
-            Scalar::all(255), thickness, 8);
+            putText(out, text, textOrg, fontFace, fontScale, Scalar::all(255), thickness, 8);
         }
 
         imshow("matches", out);
@@ -595,7 +626,7 @@ int main(int argc, char **argv)
             case 27: // ESC
                      g_bExit = true;
                      break;
-            case ' ':
+            case 'c':
                      g_bDrawCircles  = !g_bDrawCircles;
                      break;
             case 'g':
