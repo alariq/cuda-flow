@@ -24,9 +24,12 @@
                 ],
                 "env": {
                 },
-                "args--": ["--left", "img/DJI_0616.jpg", "--right", "img/DJI_0618.jpg" ],
+                "args-img": ["--left", "DJI_0616.jpg", "--right", "DJI_0618.jpg" ],
                 "args-img": ["--left", "~/mpv-shot0016.jpg", "--right", "~/mpv-shot0017.jpg" ],
-                "args": ["--video", "airsim-drone-flight.mp4" ]
+                "args": ["--video", "airsim-drone-flight.mp4" ],
+                "args-v": ["--video", "out-1.mp4" ],
+                "args-v": ["--video", "output.mp4" ],
+                "args-img": ["--left", "a.png", "--right", "b.png" ]
             }
         },
         "simple-noargs":{

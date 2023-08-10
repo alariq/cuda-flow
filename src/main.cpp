@@ -95,7 +95,8 @@ bool g_bUseGPUHomography = false;
 // Calc the theoretical number of iterations using some conservative parameters
 const double CONFIDENCE = 0.99;
 const double INLIER_RATIO = 0.18; // Assuming lots of noise in the data!
-const double INLIER_THRESHOLD = 3.0; // pixel distance
+const double INLIER_THRESHOLD = 7.0; //3.0  // pixel distance
+const int MIN_GOOD_MATCHES = 4;
 
 double TimeDiff(timeval t1, timeval t2)
 {
@@ -110,7 +111,9 @@ Rect g_rectangle;
 bool g_bDrawingBox = false;
 bool g_bStartedDrawingBox = false;
 bool g_bHaveBox = false;
+int g_BoxStartX=0, g_BoxStartY=0;
 RNG g_rng(0);  // Generate random number
+
 
 void DrawRectangle(Mat& img, Rect box)
 {
@@ -124,35 +127,26 @@ void on_MouseHandle(int event, int x, int y, int flags, void* param) {
     switch (event) {
         case EVENT_MOUSEMOVE: {    // When mouse moves, get the current rectangle's width and height
                                   if (g_bStartedDrawingBox) {
-                                      g_rectangle.width = x - g_rectangle.x;
-                                      g_rectangle.height = y - g_rectangle.y;
+                                      g_rectangle.width = abs(g_BoxStartX - x);
+                                      g_rectangle.height = abs(g_BoxStartY  - y);
+                                      g_rectangle.x = x < g_BoxStartX ? x : g_BoxStartX;
+                                      g_rectangle.y = y < g_BoxStartY ? y : g_BoxStartY;
                                   }
                               }
                               break;
         case EVENT_LBUTTONDOWN: {  // when the left mouse button is pressed down,
                                    //get the starting corner's coordinates of the rectangle
-                                   printf("started drawing\n");
                                     g_bStartedDrawingBox = true;
-                                    g_rectangle = Rect(x, y, 0, 0);
+                                    g_BoxStartX = x;
+                                    g_BoxStartY = y;
                                 }
                                 break;
         case EVENT_LBUTTONUP: {   //when the left mouse button is released,
                                   //draw the rectangle
-                                  if(g_bStartedDrawingBox) {
+                                  if(g_bStartedDrawingBox && g_rectangle.width>1 && g_rectangle.height>1) {
                                       g_bHaveBox = true;
-                                       printf("have box\n");
                                   }
                                   g_bStartedDrawingBox = false;
-                                  if (g_rectangle.width < 0) {
-                                      g_rectangle.x += g_rectangle.width;
-                                      g_rectangle.width *= -1;
-                                  }
-
-                                  if (g_rectangle.height < 0) {
-                                      g_rectangle.y += g_rectangle.height;
-                                      g_rectangle.height *= -1;
-                                  }
-                                  //DrawRectangle(image, g_rectangle);
                               }
                               break;
     }
@@ -200,15 +194,13 @@ Mat myDrawMatches(cv::cuda::GpuMat a, cv::cuda::GpuMat b, const std::vector<Poin
 }
 #endif
 
-Mat myDrawMatches(Mat grey1, Mat grey2, const std::vector<DMatch> matches, 
-        const std::vector<KeyPoint>& kp1, const std::vector<KeyPoint>& kp2, bool b_draw_area = false) {
+void myDrawMatches(Mat result, Mat grey1, Mat grey2, const std::vector<DMatch> matches, 
+        const std::vector<KeyPoint>& kp1, const std::vector<KeyPoint>& kp2, bool b_draw_area, const std::vector<uchar>* mask) {
 
     //Mat grey1(a), grey2(b);
 
     int h = grey1.rows + grey2.rows;
     int w = max(grey1.cols, grey2.cols);
-
-    Mat result(h, w, CV_8UC3);
 
     for(int y=0; y < grey1.rows; y++) {
         for(int x=0; x < grey1.cols; x++) {
@@ -222,15 +214,16 @@ Mat myDrawMatches(Mat grey1, Mat grey2, const std::vector<DMatch> matches,
         for(int x=0; x < grey2.cols; x++) {
             result.at<Vec3b>(y+grey1.rows,x)[0] = grey2.at<uchar>(y,x);
             result.at<Vec3b>(y+grey1.rows,x)[1] = grey2.at<uchar>(y,x);
-            result.at<Vec3b>(y+grey1.rows,x)[2] = grey2.at<uchar>(y,x);        }
+            result.at<Vec3b>(y+grey1.rows,x)[2] = grey2.at<uchar>(y,x);
+        }
     }
 
     RNG match_color_rng(0);  // Generate random number
 
     for(unsigned int i=0; i < matches.size(); i++) {
-        int r = match_color_rng.uniform(0, 255);
-        int g = match_color_rng.uniform(0, 255);
-        int b = match_color_rng.uniform(0, 255);
+        int r = match_color_rng.uniform(0, 155);
+        int g = match_color_rng.uniform(0, 155);
+        int b = match_color_rng.uniform(0, 155);
 
         const int idx1 = matches[i].queryIdx;
         const int idx2 = matches[i].trainIdx;
@@ -238,14 +231,12 @@ Mat myDrawMatches(Mat grey1, Mat grey2, const std::vector<DMatch> matches,
         Point pt2 = Point(kp2[idx2].pt.x, grey1.rows + kp2[idx2].pt.y);
         Scalar c = CV_RGB(r,g,b);
 
-        line(result, pt1, pt2, c, 1, cv::LINE_AA);
+        line(result, pt1, pt2, ( mask==0 || (*mask)[i] ) ? c : CV_RGB(255,255,255),1, cv::LINE_AA);
         if(b_draw_area) {
             circle(result, pt1, kp1[idx1].size/2, c, 1, cv::LINE_AA);
             circle(result, pt2, kp2[idx2].size/2, c, 1, cv::LINE_AA);
         }
     }
-
-    return result;
 }
 
 std::vector<Point2f> transformBox(Rect r, Mat H) {
@@ -293,6 +284,7 @@ int main(int argc, char **argv)
     Mat cpu_img1, cpu_img2;
     VideoCapture cap;
     bool bUseVideo = false;
+    bool bAdvanceFrame = true;
 
 
     assert(cv::cuda::getCudaEnabledDeviceCount());
@@ -342,7 +334,10 @@ int main(int argc, char **argv)
 
     namedWindow("matches", 0);
     setMouseCallback("matches", on_MouseHandle, (void*)0);
-    Mat out;
+
+    int out_w = bUseVideo ? cap.get(cv::CAP_PROP_FRAME_WIDTH) : cpu_img1.cols;   
+    int out_h = bUseVideo ? 2*cap.get(cv::CAP_PROP_FRAME_HEIGHT): cpu_img2.rows + cpu_img2.rows;   
+    Mat out(out_h, out_w, CV_8UC3);
 
     cv::cuda::SURF_CUDA surf;
     cv::cuda::GpuMat gpu_kp1, gpu_kp2;
@@ -357,29 +352,32 @@ int main(int argc, char **argv)
     int opencv_inliers;
     int K;
 
+    Mat f;
     int frame_idx = -1;
-    while(!g_bExit && cap.isOpened())
+    while(!g_bExit && (!bUseVideo || cap.isOpened()))
     {
+        if(bUseVideo) {
+            if(bAdvanceFrame) {
 
-        //cpu_img1 = cpu_img2;
-        //img1 = img2;
-        cpu_img2.copyTo(cpu_img1);
-        img2.copyTo(img1);
+                cpu_img2.copyTo(cpu_img1);
+                img2.copyTo(img1);
 
+                if(!cap.read(f)) {
+                    fprintf(stderr, "Error reading frame");
+                    exit(-1);
+                }
 
-        Mat f;
-        if(!cap.read(f)) {
-            fprintf(stderr, "Error reading frame");
-            exit(-1);
+                cv::cvtColor(f, cpu_img2, cv::COLOR_RGB2GRAY);
+                img2.upload(cpu_img2);
+
+                frame_idx++;
+
+                if(frame_idx<1)
+                    continue;
+
+                bAdvanceFrame = false;
+            }
         }
-
-        cv::cvtColor(f, cpu_img2, cv::COLOR_RGB2GRAY);
-        img2.upload(cpu_img2);
-
-        frame_idx++;
-
-        if(frame_idx<1)
-            continue;
 
         // SURF
         vector <Point2Df> src, dst;
@@ -419,6 +417,9 @@ int main(int argc, char **argv)
             float ratio_test = 0.75f;
             for(int i=0; i< knnMatches.size(); ++i) {
                 const vector<DMatch>& m = knnMatches[i];
+                if(m.size() == 0) {
+                    continue;
+                }
                 const float dist = m[0].distance;
                 if(dist < ratio_test * m[1].distance) {
 
@@ -456,13 +457,11 @@ int main(int argc, char **argv)
             //imshow("matches", img_matches);
             //waitKey();
 
-            out = myDrawMatches(cpu_img1, cpu_img2, goodMatches, kp1, kp2, g_bDrawCircles);
-            if (g_bHaveBox) {
-                DrawRectangle(out, g_rectangle);
-            }
         }
 
         // OpenCV homography
+        vector<uchar> open_cv_status;
+        if(goodMatches.size()>=MIN_GOOD_MATCHES)
         {
             gettimeofday(&t1, NULL);
 
@@ -479,17 +478,16 @@ int main(int argc, char **argv)
                 dst2.at<float>(i,1) = dst[i].y;
             }
 
-            vector<uchar> status;
-
             // LMEDS/RHO
-            OpenCV_H = findHomography(src2, dst2,status, cv::RANSAC , INLIER_THRESHOLD);
-            opencv_inliers = accumulate(status.begin(), status.end(), 0);
+            OpenCV_H = findHomography(src2, dst2, open_cv_status, cv::RANSAC, INLIER_THRESHOLD);
+            opencv_inliers = accumulate(open_cv_status.begin(), open_cv_status.end(), 0);
 
 
             gettimeofday(&t2, NULL);
             printf("RANSAC Homography (OpenCV): %g ms\n", TimeDiff(t1,t2));
         }
 
+        if(goodMatches.size()>=MIN_GOOD_MATCHES)
         {
             // Homography
             {
@@ -505,6 +503,7 @@ int main(int argc, char **argv)
             }
 
             // Refine homography
+            if(best_inliers >= MIN_GOOD_MATCHES)
             {
                 gettimeofday(&t1, NULL);
 
@@ -527,13 +526,17 @@ int main(int argc, char **argv)
                 }
 
                 vector<uchar> status;
-                refined_H = findHomography(src2, dst2, status, 0 /* Least square */);
+                //refined_H = findHomography(src2, dst2, status, 0 /* Least square */);
+                refined_H = findHomography(src2, dst2, status, cv::RANSAC, INLIER_THRESHOLD);
 
-                k =0;
-                for(int y=0; y < 3; y++) {
-                    for(int x=0; x < 3; x++) {
-                        best_H[k] = refined_H.at<double>(y,x);
-                        k++;
+                // do not update best_H if findHomography failed
+                if(!refined_H.empty()) {
+                    k =0;
+                    for(int y=0; y < 3; y++) {
+                        for(int x=0; x < 3; x++) {
+                            best_H[k] = refined_H.at<double>(y,x);
+                            k++;
+                        }
                     }
                 }
 
@@ -556,6 +559,12 @@ int main(int argc, char **argv)
                 gettimeofday(&t2, NULL);
             }
             printf("Refine homography: %g ms\n", TimeDiff(t1,t2));
+        }
+
+        myDrawMatches(out, cpu_img1, cpu_img2, goodMatches, kp1, kp2, g_bDrawCircles, 
+                open_cv_status.size() == goodMatches.size()? &open_cv_status : nullptr);
+        if (g_bHaveBox) {
+            DrawRectangle(out, g_rectangle);
         }
 
         gettimeofday(&t2, NULL);
@@ -595,12 +604,77 @@ int main(int argc, char **argv)
             }
         }
 
-        std::vector<Point2f> opencv_pts = transformBox(g_rectangle, OpenCV_H);
-        std::vector<Point2f> gpu_pts = transformBox(g_rectangle, refined_H);
+        if(g_bHaveBox) {
+            const Point2f y_off = Point2f(0, cpu_img1.rows);
 
-        Point2f y_off = Point2f(0, cpu_img1.rows);
-        drawPolyline(out, opencv_pts, y_off, Scalar(0, 255, 0), 1);
-        drawPolyline(out, gpu_pts, y_off, Scalar(0, 0, 255), 1);
+            if(!OpenCV_H.empty()) {
+                std::vector<Point2f> opencv_pts = transformBox(g_rectangle, OpenCV_H);
+                drawPolyline(out, opencv_pts, y_off, Scalar(255, 0, 0), 1);
+            }
+
+            if(!refined_H.empty()) {
+                std::vector<Point2f> gpu_pts = transformBox(g_rectangle, refined_H);
+                drawPolyline(out, gpu_pts, y_off, Scalar(0, 0, 255), 1);
+            }
+        }
+
+        // pose reconstruction
+        if(!OpenCV_H.empty()) {
+            Mat H = OpenCV_H;
+            // Normalization to ensure that ||c1|| = 1
+            double norm = sqrt(H.at<double>(0,0)*H.at<double>(0,0) +
+                    H.at<double>(1,0)*H.at<double>(1,0) +
+                    H.at<double>(2,0)*H.at<double>(2,0));
+            H /= norm;
+            Mat c1 = H.col(0);
+            Mat c2 = H.col(1);
+            Mat c3 = c1.cross(c2);
+            Mat tvec = H.col(2);
+            Mat R(3, 3, CV_64F);
+            for (int i = 0; i < 3; i++)
+            {
+                R.at<double>(i,0) = c1.at<double>(i,0);
+                R.at<double>(i,1) = c2.at<double>(i,0);
+                R.at<double>(i,2) = c3.at<double>(i,0);
+            }
+            String mat_str; mat_str << R;
+            String t_str; t_str << tvec;
+            printf("R (before polar decomposition): %s\n det(R): %.2f\n", mat_str.c_str(), determinant(R));
+            Mat_<double> W, U, Vt;
+            SVDecomp(R, W, U, Vt);
+            R = U*Vt;
+            double det = determinant(R);
+            if (det < 0) {
+                Vt.at<double>(2,0) *= -1;
+                Vt.at<double>(2,1) *= -1;
+                Vt.at<double>(2,2) *= -1;
+                R = U*Vt;
+            }
+            mat_str << R;
+            printf("R (after polar decomposition): %s\n det(R): %.2f\n", mat_str.c_str(), determinant(R));
+            printf("T: %s\n", t_str.c_str());
+            Mat rvec;
+            Rodrigues(R, rvec);
+            cv::Mat distCoeffs = (cv::Mat_<float>(4,1)<<0,0,0,0);
+#if 0
+            distCoeffs.at<float>(0) = 0.016478045550785764; // k1
+            distCoeffs.at<float>(1) = -0.02176317098941869; // k2
+            distCoeffs.at<float>(2) = 0.003739511470855945; // p1
+            distCoeffs.at<float>(3) = -0.0026895016023160863;// p2
+#endif
+            float squareSize = 20;
+            Mat cam_mat = Mat::eye(3,3, CV_32F);
+#if 0
+            cam_mat.at<float>(0,0) = 395.54921897113553;// fx
+            cam_mat.at<float>(1,1) = 395.470648141951; // fy
+            cam_mat.at<float>(0,2) = 325.31980911255465;
+            cam_mat.at<float>(1,2) = 245.2448967915069;
+#else
+            cam_mat.at<float>(0,2) = cpu_img1.cols/2; // cx
+            cam_mat.at<float>(1,2) = cpu_img1.rows/2; // cy
+#endif
+            cv::drawFrameAxes(out, cam_mat, distCoeffs, rvec, tvec, 2*squareSize);
+        }
 
         // drawText
         {
@@ -625,6 +699,9 @@ int main(int argc, char **argv)
         switch(Key) {
             case 27: // ESC
                      g_bExit = true;
+                     break;
+            case ' ':
+                     bAdvanceFrame = true;
                      break;
             case 'c':
                      g_bDrawCircles  = !g_bDrawCircles;
