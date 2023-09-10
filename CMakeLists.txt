@@ -56,6 +56,9 @@ message(STATUS "    include path: ${OpenCV_INCLUDE_DIRS}")
 # Declare the executable target built from your sources
 #add_executable(cuda-flow src/kernel.cu)
 add_executable(cuda-flow src/main.cpp src/CUDA_RANSAC_Homography.cu)
+add_executable(trackers-test src/tracking.cpp src/tracker_nano.cpp)
 
 # Link your application with OpenCV libraries
 target_link_libraries(cuda-flow PRIVATE ${OpenCV_LIBS} ${CUDA_LIB} opencv_xfeatures2d)
+target_link_libraries(trackers-test PRIVATE ${OpenCV_LIBS} opencv_xfeatures2d)
+
